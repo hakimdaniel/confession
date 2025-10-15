@@ -1,22 +1,20 @@
 import os
+from datetime import datetime
 from telegram import Update
 from telegram.ext import ApplicationBuilder, ContextTypes, CommandHandler, MessageHandler, filters
-from datetime import datetime
 
 # ================== CONFIG ==================
-TOKEN = os.environ.get("TOKEN")  # Pakai env variable untuk keamanan
-PUBLIC_CHANNEL_ID = os.environ.get("PUBLIC_CHANNEL_ID", "@uitmppconfession")
-PRIVATE_CHANNEL_ID = os.environ.get("PRIVATE_CHANNEL_ID", "-1003149603399")
+TOKEN = os.environ.get("BOT_TOKEN")  # Simpan token di environment variable di Render
+PUBLIC_CHANNEL_ID = os.environ.get("PUBLIC_CHANNEL")       # e.g. "@uitmppconfession"
+PRIVATE_CHANNEL_ID = os.environ.get("PRIVATE_CHANNEL")     # e.g. "-1003149603399"
 COOLDOWN_SECONDS = 10
 DAILY_IMAGE_QUOTA = 3
 # ============================================
 
 # ====== DATA ======
 user_data = {}
-banned_users = set([
-    # Masukkan user_id yang ingin dibanned langsung
-])
-username_to_id = {}  # Mapping username -> user_id untuk command /ban
+banned_users = set()
+username_to_id = {}  # mapping username -> user_id
 # ==================
 
 # ----- START -----
@@ -32,9 +30,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ----- HELP -----
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     help_text = (
-        "Mula hantar mesej secara personal di bot ini, mesej anda akan dikirim ke channel @uitmppconfession\n"
-        "Sebarang masalah boleh contact @d4n13lh4k1m\n\n"
-        "Command untuk admin:\n"
+        "Hantar mesej secara personal, mesej anda akan dihantar ke channel @uitmppconfession.\n"
+        "Contact @d4n13lh4k1m untuk masalah.\n\n"
+        "Admin commands (hanya private channel):\n"
         "/ban @username - Ban user dari private channel"
     )
     await update.message.reply_text(help_text, parse_mode="Markdown")
@@ -47,11 +45,11 @@ def reset_daily_quotas():
             user_data[user_id]['image_count'] = 0
             user_data[user_id]['last_reset'] = now
 
-# ----- BAN COMMAND (hanya private channel) -----
+# ----- BAN COMMAND -----
 async def ban_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # Hanya private channel yang boleh jalankan command
+    # Hanya private channel
     if str(update.effective_chat.id) != PRIVATE_CHANNEL_ID:
-        await update.message.reply_text("❌ Command /ban hanya boleh dijalankan dari private channel.")
+        await update.message.reply_text("❌ Command /ban hanya dari private channel.")
         return
     if not context.args:
         await update.message.reply_text("Gunakan /ban @username")
@@ -66,45 +64,43 @@ async def ban_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ----- HANDLE PM -----
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not update.message:
-        return
-
     user_id = update.message.from_user.id
     username = update.message.from_user.username or f"user{user_id}"
 
     reset_daily_quotas()
+
+    # Simpan mapping username -> id
     username_to_id[username] = user_id
 
     # ====== CHECK BAN ======
     if user_id in banned_users:
         await update.message.reply_text("❌ Kamu tidak dibenarkan menggunakan bot ini.")
         return
-    # =======================
 
     # ====== COOLDOWN ======
     last_time = user_data.get(user_id, {}).get('last_message_time')
     now = datetime.now()
     if last_time and (now - last_time).total_seconds() < COOLDOWN_SECONDS:
         wait_time = int(COOLDOWN_SECONDS - (now - last_time).total_seconds())
-        await update.message.reply_text(f"⏳ Tunggu {wait_time} saat sebelum hantar message lagi")
+        await update.message.reply_text(f"⏳ Tunggu {wait_time} saat sebelum mesej lagi")
         return
 
-    # Inisialisasi user data
+    # ====== INIT USER DATA ======
     if user_id not in user_data:
         user_data[user_id] = {'last_message_time': now, 'image_count': 0, 'last_reset': datetime.now()}
+    user_data[user_id]['last_message_time'] = now
 
-    # Cek quota gambar
+    # ====== IMAGE QUOTA ======
     if update.message.photo:
         if user_data[user_id]['image_count'] >= DAILY_IMAGE_QUOTA:
-            await update.message.reply_text(f"❌ Quota masa ni dah habis, {DAILY_IMAGE_QUOTA} gambar hari ini.")
+            await update.message.reply_text(f"❌ Quota gambar {DAILY_IMAGE_QUOTA} hari ini sudah habis.")
             return
         user_data[user_id]['image_count'] += 1
 
-    user_data[user_id]['last_message_time'] = now
-
     caption_from_user = update.message.caption or ""
+    text_to_send = update.message.text or caption_from_user
 
-    # ----- Forward ke public channel (anonymous) -----
+    # ----- PUBLIC CHANNEL (anonymous) -----
     try:
         if update.message.text:
             await context.bot.send_message(chat_id=PUBLIC_CHANNEL_ID, text=update.message.text)
@@ -115,9 +111,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"❌ Gagal hantar ke public channel: {e}")
         return
 
-    # ----- Forward ke private channel (log asli) -----
+    # ----- PRIVATE CHANNEL (log) -----
     try:
-        log_text = f"@{username} : {update.message.text or caption_from_user}"
+        log_text = f"@{username} : {text_to_send}"
         await context.bot.send_message(chat_id=PRIVATE_CHANNEL_ID, text=log_text)
     except Exception as e:
         await update.message.reply_text(f"❌ Gagal hantar log ke private channel: {e}")
@@ -129,13 +125,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 if __name__ == "__main__":
     app = ApplicationBuilder().token(TOKEN).build()
 
-    # Command handlers
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("help", help_command))
     app.add_handler(CommandHandler("ban", ban_command))
-
-    # Message handler: text + photo
-    app.add_handler(MessageHandler(filters.TEXT | filters.PHOTO, handle_message))
+    app.add_handler(MessageHandler(filters.ChatType.PRIVATE, handle_message))
 
     print("Bot is running...")
     app.run_polling()
