@@ -1,11 +1,12 @@
+import os
 from telegram import Update
 from telegram.ext import ApplicationBuilder, ContextTypes, CommandHandler, MessageHandler, filters
 from datetime import datetime
 
 # ================== CONFIG ==================
-TOKEN = "BOT_TOKEN"
-PUBLIC_CHANNEL_ID = "@uitmppconfession"      # Public anonymous
-PRIVATE_CHANNEL_ID = "PRIVATE_CHANNEL"        # Private admin channel
+TOKEN = os.environ.get("TOKEN")  # Pakai env variable untuk keamanan
+PUBLIC_CHANNEL_ID = os.environ.get("PUBLIC_CHANNEL_ID", "@uitmppconfession")
+PRIVATE_CHANNEL_ID = os.environ.get("PRIVATE_CHANNEL_ID", "-1003149603399")
 COOLDOWN_SECONDS = 10
 DAILY_IMAGE_QUOTA = 3
 # ============================================
@@ -13,8 +14,7 @@ DAILY_IMAGE_QUOTA = 3
 # ====== DATA ======
 user_data = {}
 banned_users = set([
-    # Masukkan user_id yang ingin dibanned langsung di sini, misal:
-    # 123456789, 987654321
+    # Masukkan user_id yang ingin dibanned langsung
 ])
 username_to_id = {}  # Mapping username -> user_id untuk command /ban
 # ==================
@@ -30,7 +30,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 # ----- HELP -----
-async def help_command(update, context):
+async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     help_text = (
         "Mula hantar mesej secara personal di bot ini, mesej anda akan dikirim ke channel @uitmppconfession\n"
         "Sebarang masalah boleh contact @d4n13lh4k1m\n\n"
@@ -57,7 +57,6 @@ async def ban_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Gunakan /ban @username")
         return
     username = context.args[0].lstrip("@")
-
     if username in username_to_id:
         user_id = username_to_id[username]
         banned_users.add(user_id)
@@ -65,22 +64,15 @@ async def ban_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         await update.message.reply_text(f"❌ Username @{username} belum pernah kirim pesan.")
 
-# ----- BAN DARI LIST SEDIA ADA -----
-def ban_from_list(usernames):
-    for username in usernames:
-        if username in username_to_id:
-            user_id = username_to_id[username]
-            banned_users.add(user_id)
-
 # ----- HANDLE PM -----
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not update.message:
+        return
+
     user_id = update.message.from_user.id
-    user_name = update.message.from_user.full_name
     username = update.message.from_user.username or f"user{user_id}"
 
     reset_daily_quotas()
-
-    # Simpan mapping username -> id
     username_to_id[username] = user_id
 
     # ====== CHECK BAN ======
@@ -89,7 +81,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     # =======================
 
-    # Cek cooldown
+    # ====== COOLDOWN ======
     last_time = user_data.get(user_id, {}).get('last_message_time')
     now = datetime.now()
     if last_time and (now - last_time).total_seconds() < COOLDOWN_SECONDS:
@@ -125,12 +117,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # ----- Forward ke private channel (log asli) -----
     try:
-        if update.message.text:
-            log_text = f"@{username} : {update.message.text}"
-            await context.bot.send_message(chat_id=PRIVATE_CHANNEL_ID, text=log_text)
-        elif update.message.photo:
-            log_text = f"@{username} : {caption_from_user}"
-            await context.bot.send_message(chat_id=PRIVATE_CHANNEL_ID, text=log_text)
+        log_text = f"@{username} : {update.message.text or caption_from_user}"
+        await context.bot.send_message(chat_id=PRIVATE_CHANNEL_ID, text=log_text)
     except Exception as e:
         await update.message.reply_text(f"❌ Gagal hantar log ke private channel: {e}")
         return
@@ -140,10 +128,14 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ================== MAIN ==================
 if __name__ == "__main__":
     app = ApplicationBuilder().token(TOKEN).build()
+
+    # Command handlers
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("help", help_command))
     app.add_handler(CommandHandler("ban", ban_command))
-    app.add_handler(MessageHandler(filters.ChatType.PRIVATE, handle_message))
+
+    # Message handler: text + photo
+    app.add_handler(MessageHandler(filters.TEXT | filters.PHOTO, handle_message))
 
     print("Bot is running...")
     app.run_polling()
